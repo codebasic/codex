@@ -379,6 +379,79 @@ fn test_built_in_model_providers_include_amazon_bedrock_runtime() {
 }
 
 #[test]
+fn test_built_in_model_providers_include_loop() {
+    let providers = built_in_model_providers(/*openai_base_url*/ None);
+    let loop_provider = providers
+        .get(LOOP_PROVIDER_ID)
+        .expect("Loop provider should be built in");
+
+    assert_eq!(loop_provider.name, "Loop");
+    assert_eq!(loop_provider.wire_api, WireApi::Responses);
+    assert!(!loop_provider.requires_openai_auth);
+    assert!(
+        loop_provider
+            .base_url
+            .as_deref()
+            .is_some_and(|url| url.ends_with("/v1"))
+    );
+}
+
+#[test]
+fn test_create_loop_provider_base_url_precedence() {
+    // Loop env vars are Loop-specific; collapse all precedence assertions into a
+    // single test so no other test can race on them, and restore prior state.
+    // `std::env::{set_var,remove_var}` are `unsafe` on this edition (process-global
+    // state), but the three keys here are Loop-only and touched nowhere else.
+    fn saved(key: &str) -> Option<String> {
+        std::env::var(key).ok()
+    }
+    let keys = ["LOOP_BASE_URL", "CODEX_LOOP_BASE_URL", "LOOP_PORT"];
+    let saved_values = keys.map(saved);
+
+    let restore = || {
+        for (key, value) in keys.iter().zip(saved_values.iter()) {
+            match value {
+                Some(v) => unsafe { std::env::set_var(key, v) },
+                None => unsafe { std::env::remove_var(key) },
+            }
+        }
+    };
+
+    // No env vars -> default port.
+    for key in keys {
+        unsafe { std::env::remove_var(key) };
+    }
+    let provider = create_loop_provider();
+    assert_eq!(
+        provider.base_url.as_deref(),
+        Some(format!("http://localhost:{DEFAULT_LOOP_PORT}/v1").as_str())
+    );
+
+    // LOOP_PORT alone changes the port.
+    unsafe { std::env::set_var("LOOP_PORT", "9000") };
+    let provider = create_loop_provider();
+    assert_eq!(
+        provider.base_url.as_deref(),
+        Some("http://localhost:9000/v1")
+    );
+
+    // CODEX_LOOP_BASE_URL beats LOOP_PORT.
+    unsafe { std::env::set_var("CODEX_LOOP_BASE_URL", "http://center.internal:8000/v1") };
+    let provider = create_loop_provider();
+    assert_eq!(
+        provider.base_url.as_deref(),
+        Some("http://center.internal:8000/v1")
+    );
+
+    // LOOP_BASE_URL beats everything.
+    unsafe { std::env::set_var("LOOP_BASE_URL", "http://gateway.corp/v1") };
+    let provider = create_loop_provider();
+    assert_eq!(provider.base_url.as_deref(), Some("http://gateway.corp/v1"));
+
+    restore();
+}
+
+#[test]
 fn test_merge_configured_model_providers_adds_custom_provider() {
     let custom_provider = ModelProviderInfo {
         name: "Custom".to_string(),
