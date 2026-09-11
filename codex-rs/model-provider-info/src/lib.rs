@@ -497,6 +497,8 @@ pub const DEFAULT_OLLAMA_PORT: u16 = 11434;
 
 pub const LMSTUDIO_OSS_PROVIDER_ID: &str = "lmstudio";
 pub const OLLAMA_OSS_PROVIDER_ID: &str = "ollama";
+pub const LOOP_PROVIDER_ID: &str = "loop";
+pub const DEFAULT_LOOP_PORT: u16 = 8000;
 
 /// Built-in default provider list.
 pub fn built_in_model_providers(
@@ -509,9 +511,12 @@ pub fn built_in_model_providers(
         P::create_amazon_bedrock_runtime_provider(/*aws*/ None);
 
     // We do not want to be in the business of adjucating which third-party
-    // providers are bundled with Codex CLI, so we only include the OpenAI and
-    // open source ("oss") providers by default. Users are encouraged to add to
-    // `model_providers` in config.toml to add their own providers.
+    // providers are bundled with Codex CLI, so we only include the OpenAI,
+    // Amazon Bedrock, and open source ("oss") providers by default, plus the
+    // Loop on-prem gateway provider (Codebasic fork addition — not intended to
+    // be upstreamed, so every upstream merge must carry this entry). Users are
+    // encouraged to add to `model_providers` in config.toml to add their own
+    // providers.
     [
         (OPENAI_PROVIDER_ID, openai_provider),
         (AMAZON_BEDROCK_PROVIDER_ID, amazon_bedrock_provider),
@@ -527,6 +532,7 @@ pub fn built_in_model_providers(
             LMSTUDIO_OSS_PROVIDER_ID,
             create_oss_provider(DEFAULT_LMSTUDIO_PORT, WireApi::Responses),
         ),
+        (LOOP_PROVIDER_ID, create_loop_provider()),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v))
@@ -609,6 +615,48 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         auth: None,
         aws: None,
         wire_api,
+        query_params: None,
+        http_headers: None,
+        env_http_headers: None,
+        request_max_retries: None,
+        stream_max_retries: None,
+        stream_idle_timeout_ms: None,
+        websocket_connect_timeout_ms: None,
+        requires_openai_auth: false,
+        supports_websockets: false,
+        supports_standalone_web_search: false,
+    }
+}
+
+/// Create the Loop provider — Codebasic on-prem gateway (Router 8000).
+/// Env overrides: LOOP_BASE_URL > CODEX_LOOP_BASE_URL > http://localhost:8000/v1
+/// LOOP_PORT is also respected if no explicit URL is given.
+pub fn create_loop_provider() -> ModelProviderInfo {
+    let base_url = std::env::var("LOOP_BASE_URL")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| {
+            std::env::var("CODEX_LOOP_BASE_URL")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+        })
+        .unwrap_or_else(|| {
+            let port = std::env::var("LOOP_PORT")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+                .and_then(|v| v.parse::<u16>().ok())
+                .unwrap_or(DEFAULT_LOOP_PORT);
+            format!("http://localhost:{port}/v1")
+        });
+    ModelProviderInfo {
+        name: "Loop".into(),
+        base_url: Some(base_url),
+        env_key: None,
+        env_key_instructions: None,
+        experimental_bearer_token: None,
+        auth: None,
+        aws: None,
+        wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
         env_http_headers: None,
